@@ -8,13 +8,6 @@
 
 ---
 
-## 🔗 Related Project
-This backend serves as the primary API for the **Faizane Madina Masjid Southend** website frontend.
-
-* **Frontend Repository:** [faizan-e-madina-frontend](https://github.com/YusufQuresh1/faizan-e-madina-frontend.git)
-
----
-
 ## 📍 Overview
 This repository contains the backend source code for the **Faizane Madina Masjid Southend** project.
 
