@@ -8,6 +8,13 @@
 
 ---
 
+## 🔗 Related Project
+This backend serves as the primary API for the **Faizane Madina Masjid Southend** website frontend.
+
+* **Frontend Repository:** [Faizane-Madina-Masjid-Southend/frontend](https://github.com/Faizane-Madina-Masjid-Southend/frontend)
+
+---
+
 ## 📍 Overview
 This repository contains the backend source code for the **Faizane Madina Masjid Southend** project.
 
@@ -55,8 +62,8 @@ The CMS is structured around specific data models tailored to mosque operations:
 Clone the repository and install dependencies:
 
 ```bash
-git clone [https://github.com/YusufQuresh1/faizan-e-madina-backend.git](https://github.com/YusufQuresh1/faizan-e-madina-backend.git)
-cd faizan-e-madina-backend
+git clone [https://github.com/Faizane-Madina-Masjid-Southend/backend.git](https://github.com/Faizane-Madina-Masjid-Southend/backend.git)
+cd backend
 npm install
 ````
 
@@ -149,4 +156,4 @@ export default ({ env }) => ({
 **Yusuf Qureshi**
 *Connect with me on LinkedIn to discuss this project further.*
 
-  * [LinkedIn Profile](https://www.linkedin.com/in/mohammedyusufqureshi)
+  * [LinkedIn Profile](https://linkedin.com/in/mohammedyusufqureshi)
