@@ -11,6 +11,7 @@ module.exports = [
         'http://localhost:3000',
         'http://localhost:1337',
         'https://yusufquresh1.github.io',
+        'https://faizane-madina-masjid-southend.github.io',
         'https://193.123.187.241.nip.io',
       ],
     },
