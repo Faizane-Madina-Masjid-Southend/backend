@@ -1,0 +1,51 @@
+{
+    "kind": "collectionType",
+    "collectionName": "timetables",
+    "info": {
+        "singularName": "timetable",
+        "pluralName": "timetables",
+        "displayName": "Timetable"
+    },
+    "options": {
+        "draftAndPublish": true
+    },
+    "pluginOptions": {},
+    "attributes": {
+        "timetableImage": {
+            "type": "media",
+            "multiple": false,
+            "allowedTypes": [
+                "images",
+                "files",
+                "videos",
+                "audios"
+            ]
+        },
+        "prayerData": {
+            "type": "json"
+        },
+        "month": {
+            "type": "enumeration",
+            "required": true,
+            "enum": [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December"
+            ]
+        },
+        "year": {
+            "type": "integer",
+            "required": true,
+            "default": 2025
+        }
+    }
+}

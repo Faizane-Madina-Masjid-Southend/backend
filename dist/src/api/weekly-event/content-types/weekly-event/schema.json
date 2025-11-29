@@ -1,0 +1,44 @@
+{
+    "kind": "collectionType",
+    "collectionName": "weekly_events",
+    "info": {
+        "singularName": "weekly-event",
+        "pluralName": "weekly-events",
+        "displayName": "Weekly Event"
+    },
+    "options": {
+        "draftAndPublish": true
+    },
+    "pluginOptions": {},
+    "attributes": {
+        "title": {
+            "type": "string",
+            "required": true
+        },
+        "time": {
+            "type": "string",
+            "required": true
+        },
+        "day": {
+            "type": "enumeration",
+            "required": true,
+            "enum": [
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday"
+            ]
+        },
+        "category": {
+            "type": "enumeration",
+            "required": true,
+            "enum": [
+                "madrasa-younger",
+                "madrasa-older",
+                "ijtimah",
+                "jummah"
+            ]
+        }
+    }
+}

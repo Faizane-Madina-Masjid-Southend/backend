@@ -130,6 +130,5 @@ exports
 
 .env
 ecosystem.config.js
-dist/
-build/
+
 .cache/
