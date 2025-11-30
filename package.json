@@ -15,10 +15,12 @@
     "upgrade:dry": "npx @strapi/upgrade latest --dry"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@strapi/plugin-cloud": "5.27.0",
     "@strapi/plugin-users-permissions": "5.27.0",
     "@strapi/provider-upload-cloudinary": "^5.31.0",
     "@strapi/strapi": "5.27.0",
+    "better-sqlite3": "^12.5.0",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
     "react": "^18.0.0",
@@ -27,7 +29,7 @@
     "styled-components": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^20.19.25",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "typescript": "^5"

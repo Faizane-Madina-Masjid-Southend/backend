@@ -21,9 +21,6 @@
         "audios"
       ]
     },
-    "prayerData": {
-      "type": "json"
-    },
     "month": {
       "type": "enumeration",
       "required": true,
@@ -46,6 +43,9 @@
       "type": "integer",
       "required": true,
       "default": 2025
+    },
+    "prayerData": {
+      "type": "json"
     }
   }
 }
