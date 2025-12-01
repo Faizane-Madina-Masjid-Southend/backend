@@ -35,14 +35,15 @@ function getFileId(fieldData) {
     return null;
 }
 async function processTimetable(event) {
+    var _a;
     const { result, params } = event;
-    // 1. SMART LOOP PROTECTION (Updated for Instructions)
+    // 1. LOOP PROTECTION
     const currentData = params.data && params.data[JSON_FIELD];
     if (currentData) {
-        // If the data is an array and has MORE than 5 entries, it's likely a real month.
-        // In that case, we stop to prevent overwriting or looping.
-        // If it has 1 entry (your instruction) or 0, we proceed.
-        if (Array.isArray(currentData) && currentData.length > 5) {
+        if (Array.isArray(currentData) && currentData.length > 5)
+            return;
+        const isError = Array.isArray(currentData) && currentData[0] && currentData[0].ERROR;
+        if (!isError && Array.isArray(currentData) && currentData.length > 5) {
             return;
         }
     }
@@ -50,10 +51,8 @@ async function processTimetable(event) {
     if (!params.data || !params.data[PDF_FIELD])
         return;
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        strapi.log.error("[Timetable AI] GEMINI_API_KEY is missing in .env");
+    if (!apiKey)
         return;
-    }
     try {
         const fileId = getFileId(params.data[PDF_FIELD]);
         if (!fileId)
@@ -61,46 +60,42 @@ async function processTimetable(event) {
         const fileData = await strapi.db.query('plugin::upload.file').findOne({
             where: { id: fileId }
         });
-        if (!fileData || fileData.ext !== '.pdf') {
-            strapi.log.warn(`[Timetable AI] File is not a PDF.`);
+        if (!fileData || fileData.ext !== '.pdf')
             return;
-        }
+        // 3. Get File Buffer
         let base64Data = "";
         if (fileData.url.startsWith('http')) {
-            strapi.log.info(`[Timetable AI] Downloading file from Cloud...`);
             const response = await fetch(fileData.url);
             if (!response.ok)
-                throw new Error(`Failed to fetch PDF from URL: ${response.statusText}`);
+                throw new Error(`Failed to fetch PDF`);
             const arrayBuffer = await response.arrayBuffer();
             base64Data = Buffer.from(arrayBuffer).toString('base64');
         }
         else {
             const publicDir = strapi.dirs.static.public;
             const filePath = path_1.default.join(publicDir, fileData.url);
-            if (!fs_1.default.existsSync(filePath)) {
-                strapi.log.error(`[Timetable AI] File missing locally: ${filePath}`);
+            if (!fs_1.default.existsSync(filePath))
                 return;
-            }
             const fileBuffer = fs_1.default.readFileSync(filePath);
             base64Data = fileBuffer.toString('base64');
         }
+        // 4. Send to Gemini
         const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
-        // SPEED OPTION: Using 2.0 Flash for faster UX. 
-        // Switch back to "gemini-2.5-pro" if you notice any accuracy issues.
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); // Speed Model
+        const targetMonth = result.month || "Unknown";
+        const targetYear = result.year || "Unknown";
         const prompt = `
-      You are a data extraction engine. 
-      Extract the prayer timetable from this PDF into JSON format.
+      You are a data extraction engine.
       
-      CRITICAL RULES:
-      1. Output MUST be valid JSON.
-      2. Do not include markdown formatting (no \`\`\`json tags).
-      3. Accuracy must be 100%. Copy the numbers EXACTLY as they appear.
-      4. DO NOT add leading zeros (e.g. if text is "5.30", output "5.30", NOT "05.30").
-      5. If a 'Jamaat' time is missing for Maghrib, use the 'Maghrib Start' time.
-      6. SPECIAL CASE: If a column contains multiple times (e.g., "12.30/1.30"), KEEP BOTH TIMES exactly as written with the slash.
-      
-      REQUIRED JSON STRUCTURE:
+      STEP 1: SAFETY CHECK
+      Scan the document for a printed Month Name.
+      - IF you find a month name AND it clearly CONTRADICTS the target month "${targetMonth}":
+        Return this JSON: [{ "ERROR": "MISMATCH: PDF says [Found Month] but entry is for ${targetMonth}." }]
+      - IF you find NO month name OR it matches "${targetMonth}":
+        Proceed to Step 2.
+
+      STEP 2: EXTRACTION
+      Extract the prayer timetable into this JSON format:
       [
         {
           "date": 1,
@@ -112,8 +107,14 @@ async function processTimetable(event) {
           "isha": { "start": "5.53", "jamaat": "7.00" }
         }
       ]
+
+      RULES:
+      1. 100% Accuracy for numbers.
+      2. No leading zeros.
+      3. Keep slashes for multiple times.
+      4. Output ONLY valid JSON.
     `;
-        strapi.log.info(`[Timetable AI] Processing ${fileData.name} with Gemini Flash...`);
+        strapi.log.info(`[Timetable AI] Processing PDF for ${targetMonth}...`);
         const aiResult = await model.generateContent([
             prompt,
             { inlineData: { data: base64Data, mimeType: "application/pdf" } },
@@ -122,14 +123,18 @@ async function processTimetable(event) {
         const textResponse = response.text();
         const cleanJson = textResponse.replace(/```json/g, "").replace(/```/g, "").trim();
         const parsedData = JSON.parse(cleanJson);
-        strapi.log.info(`[Timetable AI] AI finished. Saving to DB...`);
-        // Explicit update
+        // 5. Save Result
         await strapi.entityService.update(COLLECTION_UID, result.id, {
             data: {
                 [JSON_FIELD]: parsedData
             }
         });
-        strapi.log.info(`[Timetable AI] SUCCESS! Database updated.`);
+        if ((_a = parsedData[0]) === null || _a === void 0 ? void 0 : _a.ERROR) {
+            strapi.log.warn(`[Timetable AI] BLOCKED: ${parsedData[0].ERROR}`);
+        }
+        else {
+            strapi.log.info(`[Timetable AI] SUCCESS! Database updated.`);
+        }
     }
     catch (error) {
         strapi.log.error(`[Timetable AI] Error: ${error.message}`);
