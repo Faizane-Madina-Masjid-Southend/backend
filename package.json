@@ -14,12 +14,13 @@
     "upgrade": "npx @strapi/upgrade latest",
     "upgrade:dry": "npx @strapi/upgrade latest --dry"
   },
-  "dependencies": {
+"dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@strapi/plugin-cloud": "5.27.0",
-    "@strapi/plugin-users-permissions": "5.27.0",
-    "@strapi/provider-upload-cloudinary": "^5.31.0",
-    "@strapi/strapi": "5.27.0",
+    "@strapi/strapi": "5.32.0",
+    "@strapi/admin": "5.32.0",
+    "@strapi/plugin-users-permissions": "5.32.0",
+    "@strapi/plugin-cloud": "5.32.0",
+    "@strapi/provider-upload-cloudinary": "5.32.0",
     "better-sqlite3": "^12.5.0",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
