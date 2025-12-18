@@ -3,140 +3,165 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const generative_ai_1 = require("@google/generative-ai");
+const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-// --- CONFIGURATION ---
-const PDF_FIELD = 'timetableImage';
-const JSON_FIELD = 'prayerData';
-const COLLECTION_UID = 'api::timetable.timetable';
-// ---------------------
 exports.default = {
-    async afterCreate(event) {
-        await processTimetable(event);
+    async beforeCreate(event) {
     },
-    async afterUpdate(event) {
-        await processTimetable(event);
+    async beforeUpdate(event) {
+        const { data, where } = event.params;
+        try {
+            // 1. Fetch entry to get File + Month + Year
+            // @ts-ignore
+            const entry = await strapi.entityService.findOne("api::timetable.timetable", where.id, { populate: ["timetableImage"] });
+            // @ts-ignore
+            if (entry && entry.timetableImage) {
+                const uploadDir = path_1.default.join(strapi.dirs.static.public, "uploads");
+                // @ts-ignore
+                const fileName = entry.timetableImage.hash + entry.timetableImage.ext;
+                const fullPath = path_1.default.join(uploadDir, fileName);
+                if (fs_1.default.existsSync(fullPath)) {
+                    console.log(`👁️ OCR Parser: Processing ${entry.month} ${entry.year}...`);
+                    // --- STEP A: Convert PDF to High-Res Image ---
+                    const tempImgPrefix = path_1.default.join("/tmp", `timetable-${Date.now()}`);
+                    try {
+                        // -r 300: High DPI is crucial for strict regex
+                        (0, child_process_1.execSync)(`pdftoppm -png -r 300 "${fullPath}" "${tempImgPrefix}"`);
+                    }
+                    catch (e) {
+                        throw new Error("Failed to convert PDF. Is poppler-utils installed?");
+                    }
+                    // --- STEP B: Tesseract OCR ---
+                    const imgPath = `${tempImgPrefix}-1.png`;
+                    let rawText = "";
+                    if (fs_1.default.existsSync(imgPath)) {
+                        try {
+                            // --psm 6: Assume a single uniform block of text
+                            rawText = (0, child_process_1.execSync)(`tesseract "${imgPath}" stdout --psm 6`, {
+                                encoding: "utf8",
+                            });
+                        }
+                        catch (e) {
+                            throw new Error("Failed to run OCR. Is tesseract-ocr installed?");
+                        }
+                        finally {
+                            if (fs_1.default.existsSync(imgPath))
+                                fs_1.default.unlinkSync(imgPath);
+                        }
+                    }
+                    else {
+                        throw new Error("Could not generate image from PDF.");
+                    }
+                    // --- STEP C: Strict Parsing ---
+                    const parsedRows = parseTimetableStrict(rawText);
+                    console.log(`🔒 Extracted Rows: ${parsedRows.length}`);
+                    // --- STEP D: Deep Logic Validation ---
+                    // Pass the year and month from the entry to ensure exact day counts
+                    validateTimetableLogic(parsedRows, entry.year, entry.month);
+                    // Success: Save data
+                    data.prayerData = parsedRows;
+                }
+            }
+        }
+        catch (err) {
+            console.error("❌ Validation Error:", err.message);
+            throw new Error(err.message);
+        }
     },
 };
-function getFileId(fieldData) {
-    if (!fieldData)
-        return null;
-    if (typeof fieldData === 'number' || typeof fieldData === 'string')
-        return fieldData;
-    if (typeof fieldData === 'object' && 'id' in fieldData)
-        return fieldData.id;
-    if (fieldData.connect && Array.isArray(fieldData.connect) && fieldData.connect.length > 0) {
-        return getFileId(fieldData.connect[0]);
+/**
+ * PARSER ENGINE (STRICT)
+ */
+function parseTimetableStrict(text) {
+    const rows = [];
+    const lines = text.split(/\r?\n/);
+    // Strict Time Pattern: 1 or 2 digits, dot/colon, 2 digits
+    const TIME = `(\\d{1,2}[:.]\\d{2}(?:\\s*\\/\\s*\\d{1,2}[:.]\\d{2})?)`;
+    const rowRegex = new RegExp(`^\\s*(\\d{1,2})\\s+([A-Za-z]{3})\\s+` +
+        `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+        `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+        `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+        `${TIME}\\s+${TIME}`);
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        const lower = trimmed.toLowerCase();
+        if (lower.startsWith("date") || lower.startsWith("day") || lower.startsWith("begins")) {
+            continue;
+        }
+        const match = trimmed.match(rowRegex);
+        if (match) {
+            const [_full, date, day, fajrStart, fajrJamaat, sunrise, dhahwa, dhuharStart, dhuharJamaat, asrStart, asrJamaat, maghrib, ishaStart, ishaJamaat,] = match;
+            rows.push({
+                date: parseInt(date),
+                day: day.toUpperCase(),
+                fajr: { start: normalizeTime(fajrStart), jamaat: normalizeTime(fajrJamaat) },
+                sunrise: normalizeTime(sunrise),
+                dhuhar: { start: normalizeTime(dhuharStart), jamaat: normalizeTime(dhuharJamaat) },
+                asr: { start: normalizeTime(asrStart), jamaat: normalizeTime(asrJamaat) },
+                maghrib: { start: normalizeTime(maghrib), jamaat: normalizeTime(maghrib) },
+                isha: { start: normalizeTime(ishaStart), jamaat: normalizeTime(ishaJamaat) },
+            });
+        }
     }
-    if (Array.isArray(fieldData) && fieldData.length > 0) {
-        return getFileId(fieldData[0]);
-    }
-    return null;
+    return rows;
 }
-async function processTimetable(event) {
+/**
+ * LOGIC VALIDATOR
+ */
+function validateTimetableLogic(rows, year, monthInput) {
+    const DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+    // 1. Calculate Expected Days for this specific Month/Year
+    const monthIndex = getMonthIndex(monthInput);
+    const expectedDays = new Date(year, monthIndex + 1, 0).getDate();
+    if (rows.length !== expectedDays) {
+        throw new Error(`Validation Failed: ${getMonthName(monthIndex)} ${year} has ${expectedDays} days, but OCR found ${rows.length} valid rows.`);
+    }
+    // 2. Validate Sequence
+    let prevDate = rows[0].date;
+    if (prevDate !== 1)
+        console.warn("Warning: Timetable does not start on Date 1.");
+    let prevDayIndex = DAYS.indexOf(rows[0].day);
+    if (prevDayIndex === -1)
+        throw new Error(`Invalid Day format in row 1: ${rows[0].day}`);
+    for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        const currentDayIndex = DAYS.indexOf(row.day);
+        // Date Sequence (1 -> 2)
+        if (row.date !== prevDate + 1) {
+            throw new Error(`Logic Error: Date jumped from ${prevDate} to ${row.date}.`);
+        }
+        // Day Sequence (Mon -> Tue)
+        const expectedDayIndex = (prevDayIndex + 1) % 7;
+        if (currentDayIndex !== expectedDayIndex) {
+            throw new Error(`Logic Error on Date ${row.date}: Expected ${DAYS[expectedDayIndex]}, but found ${row.day}.`);
+        }
+        prevDate = row.date;
+        prevDayIndex = currentDayIndex;
+    }
+    console.log("✅ Logic Validation Passed: Perfect Match.");
+}
+function normalizeTime(raw) {
+    if (raw.includes("/")) {
+        return raw.split("/").map(t => normalizeTime(t.trim())).join(" / ");
+    }
+    const clean = raw.replace(".", ":");
+    const [h, m] = clean.split(":");
+    return `${h.padStart(2, "0")}:${m}`;
+}
+function getMonthIndex(month) {
     var _a;
-    const { result, params } = event;
-    // 1. LOOP PROTECTION
-    const currentData = params.data && params.data[JSON_FIELD];
-    if (currentData) {
-        if (Array.isArray(currentData) && currentData.length > 5)
-            return;
-        const isError = Array.isArray(currentData) && currentData[0] && currentData[0].ERROR;
-        if (!isError && Array.isArray(currentData) && currentData.length > 5) {
-            return;
-        }
-    }
-    // 2. Validation
-    if (!params.data || !params.data[PDF_FIELD])
-        return;
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey)
-        return;
-    try {
-        const fileId = getFileId(params.data[PDF_FIELD]);
-        if (!fileId)
-            return;
-        const fileData = await strapi.db.query('plugin::upload.file').findOne({
-            where: { id: fileId }
-        });
-        if (!fileData || fileData.ext !== '.pdf')
-            return;
-        // 3. Get File Buffer
-        let base64Data = "";
-        if (fileData.url.startsWith('http')) {
-            const response = await fetch(fileData.url);
-            if (!response.ok)
-                throw new Error(`Failed to fetch PDF`);
-            const arrayBuffer = await response.arrayBuffer();
-            base64Data = Buffer.from(arrayBuffer).toString('base64');
-        }
-        else {
-            const publicDir = strapi.dirs.static.public;
-            const filePath = path_1.default.join(publicDir, fileData.url);
-            if (!fs_1.default.existsSync(filePath))
-                return;
-            const fileBuffer = fs_1.default.readFileSync(filePath);
-            base64Data = fileBuffer.toString('base64');
-        }
-        // 4. Send to Gemini
-        const genAI = new generative_ai_1.GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const targetMonth = result.month || "Unknown";
-        const targetYear = result.year || "Unknown";
-        const prompt = `
-      You are a data extraction engine.
-      
-      STEP 1: SAFETY CHECK
-      Scan the document for a printed Month Name.
-      - IF you find a month name AND it clearly CONTRADICTS the target month "${targetMonth}":
-        Return this JSON: [{ "ERROR": "MISMATCH: PDF says [Found Month] but entry is for ${targetMonth}." }]
-      - IF you find NO month name OR it matches "${targetMonth}":
-        Proceed to Step 2.
-
-      STEP 2: EXTRACTION
-      Extract the prayer timetable into this JSON format:
-      [
-        {
-          "date": 1,
-          "day": "MON",
-          "fajr": { "start": "5.39", "jamaat": "7.00" },
-          "dhuhar": { "start": "11.47", "jamaat": "12.30/1.30" },
-          "asr": { "start": "2.08", "jamaat": "2.30" },
-          "maghrib": { "start": "3.53", "jamaat": "3.53" },
-          "isha": { "start": "5.53", "jamaat": "7.00" }
-        }
-      ]
-
-      RULES:
-      1. 100% Accuracy for numbers.
-      2. No leading zeros.
-      3. Keep slashes for multiple times.
-      4. Output ONLY valid JSON.
-    `;
-        strapi.log.info(`[Timetable AI] Processing PDF for ${targetMonth}...`);
-        const aiResult = await model.generateContent([
-            prompt,
-            { inlineData: { data: base64Data, mimeType: "application/pdf" } },
-        ]);
-        const response = await aiResult.response;
-        const textResponse = response.text();
-        const cleanJson = textResponse.replace(/```json/g, "").replace(/```/g, "").trim();
-        const parsedData = JSON.parse(cleanJson);
-        // 5. Save Result
-        await strapi.entityService.update(COLLECTION_UID, result.id, {
-            data: {
-                [JSON_FIELD]: parsedData
-            }
-        });
-        if ((_a = parsedData[0]) === null || _a === void 0 ? void 0 : _a.ERROR) {
-            strapi.log.warn(`[Timetable AI] BLOCKED: ${parsedData[0].ERROR}`);
-        }
-        else {
-            strapi.log.info(`[Timetable AI] SUCCESS! Database updated.`);
-        }
-    }
-    catch (error) {
-        strapi.log.error(`[Timetable AI] Error: ${error.message}`);
-    }
+    if (typeof month === "number")
+        return month - 1;
+    const map = {
+        january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+        july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+    };
+    return (_a = map[month.toLowerCase()]) !== null && _a !== void 0 ? _a : 0;
+}
+function getMonthName(index) {
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return months[index];
 }
