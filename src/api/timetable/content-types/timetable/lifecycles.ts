@@ -77,7 +77,7 @@ async function processTimetable(event: any) {
 
     // 4. Send to Gemini
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const targetMonth = result.month || "Unknown";
     const targetYear = result.year || "Unknown";
