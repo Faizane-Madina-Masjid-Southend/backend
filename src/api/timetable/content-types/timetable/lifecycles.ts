@@ -19,15 +19,17 @@ export default {
       where.id,
       { populate: ["timetableImage"] }
     );
-// @ts-ignore
-    const imageId = data.timetableImage || (entry.timetableImage ? entry.timetableImage.id : null);
 
-    if (imageId) {
-      // Merge existing data with new data for validation
+    // Fallback logic: New Image > Existing Image > Null
+    // @ts-ignore
+    const rawImageInput = data.timetableImage || (entry.timetableImage ? entry.timetableImage : null);
+
+    if (rawImageInput) {
+      // Merge Year/Month for validation
       data.year = data.year || entry.year;
       data.month = data.month || entry.month;
 
-      await processTimetable(imageId, data);
+      await processTimetable(rawImageInput, data);
     }
   },
 };
@@ -35,20 +37,35 @@ export default {
 /**
  * 🧠 SHARED PROCESSOR
  */
-async function processTimetable(imageId: number | string, dataState: any) {
+async function processTimetable(imageInput: any, dataState: any) {
   try {
+    // 1. SAFELY EXTRACT ID (The Fix)
+    // Sometimes Strapi sends just "5", sometimes "{ id: 5, ... }"
+    const fileId = getFileId(imageInput);
+
+    if (!fileId) {
+      console.warn("⚠️ OCR Parser: Skipped. No valid file ID found.");
+      return;
+    }
+
+    console.log(`👁️ OCR Parser: Fetching file info for ID ${fileId}...`);
+
     // @ts-ignore
-    const file = await strapi.entityService.findOne("plugin::upload.file", imageId);
-    if (!file) return;
+    const file = await strapi.entityService.findOne("plugin::upload.file", fileId);
+    
+    if (!file) {
+      console.error(`❌ File with ID ${fileId} not found in database.`);
+      return;
+    }
 
     // @ts-ignore
     const uploadDir = path.join(strapi.dirs.static.public, "uploads");
     const fullPath = path.join(uploadDir, file.hash + file.ext);
 
     if (fs.existsSync(fullPath)) {
-      console.log(`👁️ OCR Parser: Processing PDF...`);
+      console.log(`Processing PDF at ${fullPath}...`);
 
-      // 1. PDF -> Image
+      // 2. PDF -> Image
       const tempImgPrefix = path.join("/tmp", `timetable-${Date.now()}`);
       try {
         execSync(`pdftoppm -png -r 300 "${fullPath}" "${tempImgPrefix}"`);
@@ -56,7 +73,7 @@ async function processTimetable(imageId: number | string, dataState: any) {
         throw new Error("Failed to convert PDF. Is poppler-utils installed?");
       }
 
-      // 2. OCR
+      // 3. OCR
       const imgPath = `${tempImgPrefix}-1.png`;
       let rawText = "";
       if (fs.existsSync(imgPath)) {
@@ -69,117 +86,89 @@ async function processTimetable(imageId: number | string, dataState: any) {
         }
       }
 
-      // 3. Parse Strict
+      // 4. Parse
       const parsedRows = parseTimetableStrict(rawText);
       console.log(`🔒 Extracted Rows: ${parsedRows.length}`);
 
-      // 4. Validate Logic
+      // 5. Validate Logic
       if (dataState.year && dataState.month) {
         validateTimetableLogic(parsedRows, dataState.year, dataState.month);
+      } else {
+        console.warn("⚠️ Skipping Logic Validation: Missing Year/Month.");
       }
 
-      // 5. SANITIZE (CRITICAL STEP)
-      // This converts the object to a string and back to JSON.
-      // It strips out 'undefined' values which cause the "invalid input syntax" database error.
+      // 6. SANITIZE & SAVE
       const cleanJson = JSON.parse(JSON.stringify(parsedRows));
-
-      console.log("💾 Saving Clean JSON data...");
+      console.log("💾 Saving Sanitized JSON data...");
       dataState.prayerData = cleanJson;
+    } else {
+      console.error("❌ File not found on disk at:", fullPath);
     }
   } catch (err: any) {
-    console.error("❌ Processing Error:", err.message);
+    console.error("❌ OCR Error:", err.message);
     throw new Error(err.message);
   }
 }
 
 /**
- * 🛠️ PARSER ENGINE (Matches your JSON Structure Exactly)
+ * 🛠️ HELPER: Safe ID Extraction
+ */
+function getFileId(input: any): string | number | null {
+  if (!input) return null;
+  if (typeof input === "string" || typeof input === "number") return input;
+  if (typeof input === "object") {
+    if (input.id) return input.id; // Handle { id: 5 }
+    // Handle array case (rare but possible in some relations)
+    if (Array.isArray(input) && input.length > 0) return getFileId(input[0]);
+  }
+  return null;
+}
+
+/**
+ * 🛠️ PARSER ENGINE (Strict JSON Structure)
  */
 function parseTimetableStrict(text: string) {
   const rows: any[] = [];
   const lines = text.split(/\r?\n/);
-  
-  // Regex to capture times (supports 5.30, 5:30, 12.30/1.30)
   const TIME = `(\\d{1,2}[:.]\\d{2}(?:\\s*\\/\\s*\\d{1,2}[:.]\\d{2})?)`;
 
   const rowRegex = new RegExp(
-    `^\\s*(\\d{1,2})\\s+([A-Za-z]{3})\\s+` + // Date, Day
-      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` + // FajrStart, FajrJamaat, Sunrise (Ignore)
-      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` + // Dhahwa (Ignore), DhuharStart, DhuharJamaat
-      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` + // AsrStart, AsrJamaat, MaghribStart
-      `${TIME}\\s+${TIME}`                   // IshaStart, IshaJamaat
+    `^\\s*(\\d{1,2})\\s+([A-Za-z]{3})\\s+` +
+      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+      `${TIME}\\s+${TIME}\\s+${TIME}\\s+` +
+      `${TIME}\\s+${TIME}`
   );
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    
-    // Skip headers
     const lower = trimmed.toLowerCase();
     if (lower.startsWith("date") || lower.startsWith("day") || lower.startsWith("begins")) continue;
 
     const match = trimmed.match(rowRegex);
     if (match) {
-      // Map regex groups to variables
-      // match[0] is full string
-      // match[1]=Date, match[2]=Day
-      // match[3]=FajrStart, match[4]=FajrJam
-      // match[5]=Sunrise (Skipping for JSON), match[6]=Dhahwa (Skipping)
-      // match[7]=DhuharStart, match[8]=DhuharJam
-      // match[9]=AsrStart, match[10]=AsrJam
-      // match[11]=MaghribStart, match[12]=IshaStart, match[13]=IshaJam (Wait, check counts)
-      
-      const [
-        _, date, day, 
-        fStart, fJam, 
-        sur, // Ignored in output
-        dha, // Ignored in output
-        dStart, dJam, 
-        aStart, aJam, 
-        mStart, // Maghrib usually has 1 time or start=jamaat
-        iStart, iJam
-      ] = match;
-
-      // Create the object exactly as you requested
+      const [_, date, day, f1, f2, sur, dh, d1, d2, a1, a2, m1, m2, i1, i2] = match; // eslint-disable-line
       rows.push({
-        asr: { 
-          start: normalizeTime(aStart), 
-          jamaat: normalizeTime(aJam) 
-        },
+        asr: { start: normalizeTime(a1), jamaat: normalizeTime(a2) },
         day: day.toUpperCase(),
         date: parseInt(date),
-        fajr: { 
-          start: normalizeTime(fStart), 
-          jamaat: normalizeTime(fJam) 
-        },
-        isha: { 
-          start: normalizeTime(iStart), 
-          jamaat: normalizeTime(iJam) 
-        },
-        dhuhar: { 
-          start: normalizeTime(dStart), 
-          jamaat: normalizeTime(dJam) 
-        },
-        maghrib: { 
-          start: normalizeTime(mStart), 
-          jamaat: normalizeTime(mStart) // Maghrib jamaat usually same as start
-        }
+        fajr: { start: normalizeTime(f1), jamaat: normalizeTime(f2) },
+        isha: { start: normalizeTime(i1), jamaat: normalizeTime(i2) },
+        dhuhar: { start: normalizeTime(d1), jamaat: normalizeTime(d2) },
+        maghrib: { start: normalizeTime(m1), jamaat: normalizeTime(m1) } // Maghrib jam=start usually
       });
     }
   }
   return rows;
 }
 
-/**
- * 🛡️ VALIDATION
- */
 function validateTimetableLogic(rows: any[], year: number, monthInput: string | number) {
   const monthIndex = typeof monthInput === "number" ? monthInput - 1 : 
     ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
     .indexOf(String(monthInput).toLowerCase());
 
   const expectedDays = new Date(year, monthIndex + 1, 0).getDate();
-
   if (rows.length !== expectedDays) {
     throw new Error(`Row count mismatch: Expected ${expectedDays}, found ${rows.length}.`);
   }
@@ -190,5 +179,5 @@ function normalizeTime(raw: string): string {
   if (!raw) return "";
   if (raw.includes("/")) return raw.split("/").map(t => normalizeTime(t.trim())).join("/");
   const [h, m] = raw.replace(".", ":").split(":");
-  return `${h.padStart(2, "0")}.${m}`; // Using dot . matches your JSON format
+  return `${h.padStart(2, "0")}.${m}`;
 }
