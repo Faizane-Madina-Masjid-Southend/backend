@@ -33,6 +33,7 @@ module.exports = [
       headers: '*',
       origin: [
         'http://localhost:5173',
+        'http://localhost:4173',
         'http://localhost:3000',
         'http://localhost:1337',
         'https://yusufquresh1.github.io',
