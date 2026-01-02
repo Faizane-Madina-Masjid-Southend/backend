@@ -567,7 +567,7 @@ export interface ApiTimetableTimetable extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     year: Schema.Attribute.Integer &
       Schema.Attribute.Required &
-      Schema.Attribute.DefaultTo<2025>;
+      Schema.Attribute.DefaultTo<2026>;
   };
 }
 

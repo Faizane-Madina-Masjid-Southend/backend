@@ -42,7 +42,7 @@
         "year": {
             "type": "integer",
             "required": true,
-            "default": 2025
+            "default": 2026
         },
         "prayerData": {
             "type": "json"
